@@ -1,4 +1,5 @@
 read: readwav.c
-	cc readwav.c -lm -o read
+	clang-format -i readwav.c
+	gcc readwav.c -lm -o read
 	./read
 	rm read
