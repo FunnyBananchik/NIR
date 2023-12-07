@@ -65,28 +65,38 @@ void bpf(int16_t *buf, size_t k, int16_t *real, int16_t *imag, size_t mn) {
     imag[i] = 0;
     for (size_t j = 0; j < k; j++) {
       real[i] = real[i] + buf[j + k * mn] * cos(-2 * M_PI * i * j / k);
-      imag[i] = real[i] + buf[j + k * mn] * sin(-2 * M_PI * i * j / k);
+      imag[i] = imag[i] + buf[j + k * mn] * sin(-2 * M_PI * i * j / k);
     }
   }
 }
 
 double arg_f(size_t k, int16_t *real, int16_t *imag) {
-  size_t ind = 0;
-  double max = sqrt(real[0] * real[0] + imag[0] * imag[0]) / 3600;
+  size_t i_real = 0;
+  size_t i_imag = 0;
+  double max_real = real[0];
+  double max_imag = imag[0];
   for (size_t i = 1; i < k; i++) {
-    if (sqrt(real[i - 1] * real[i - 1] + imag[i - 1] * imag[i - 1]) / 3600 <
-        sqrt(real[i] * real[i] + imag[i] * imag[i]) / 3600) {
-      max = sqrt(real[i] * real[i] + imag[i] * imag[i]) / 3600;
-      ind = i;
+    if (real[i] > max_real) {
+      max_real = real[i];
+      i_real = i;
+    }
+    if (imag[i] > max_imag) {
+      max_imag = imag[i];
+      i_imag = i;
     }
   }
-  printf("%lf\n", 2 * M_PI * ind / k);
-  return (double)(2 * M_PI * ind / k);
+  if (max_real > max_imag) {
+    return i_real * (8000 / k);
+  } else {
+    return i_imag * (8000 / k);
+  }
 }
 
 void vad(int16_t *buf, size_t k) {
   int16_t *real = malloc(k * sizeof(int16_t));
   int16_t *imag = malloc(k * sizeof(int16_t));
+  FILE *res;
+  res = fopen("res.txt", "w");
   double frame_size = 0.01;
   size_t num_of_frames = (size_t)(k / (frame_size * 8000));
   double energy_primthresh = 40;
@@ -95,15 +105,9 @@ void vad(int16_t *buf, size_t k) {
   double sr = 0;
   double sum = 0;
   int16_t pr = 1;
-  bpf(buf, 1200, real, imag, 0);
-  for (size_t i = 0; i < 3600; i++) {
-    sr = sr + buf[i] * buf[i];
-    sum = sum + sqrt(real[i] * real[i] + imag[i] * imag[i]) / 3600;
-    pr = pr * (sqrt(real[i] * real[i] + imag[i] * imag[i]) / 3600);
-  }
-  double min_e = sr;
-  double min_sfm = 10 * log10(pow(pr, 1.0 / 3600) / (sum / 3600.0));
-  double min_f = arg_f(3600, real, imag);
+  double min_e = sqrtl(sr / 5400);
+  double min_sfm = -10 * log10f(expf(pr / 5400) / (sum / 5400.0));
+  double min_f = arg_f(5400, real, imag);
   double e = 0;
   double sfm = 0;
   double f = 0;
@@ -113,6 +117,8 @@ void vad(int16_t *buf, size_t k) {
   size_t speech = 0;
   size_t silence = 0;
   size_t count = 0;
+  tresh_sfm = sf_primthresh;
+  tresh_f = f_primthresh;
   for (size_t i = 0; i < num_of_frames; i++) {
     sr = 0;
     sum = 0;
@@ -120,15 +126,22 @@ void vad(int16_t *buf, size_t k) {
     bpf(buf, 80, real, imag, i);
     for (size_t j = 0; j < 80; j++) {
       sr = sr + buf[j + 80 * i] * buf[j + 80 * i];
-      sum = sum + sqrt(real[i] * real[i] + imag[i] * imag[i]);
-      pr = pr * sqrt(real[i] * real[i] + imag[i] * imag[i]);
+      sum = sum + sqrt(real[j] * real[j] + imag[j] * imag[j]);
+      pr = pr + logf((sqrt(real[j] * real[j] + imag[j] * imag[j])));
     }
-    e = sr;
-    sfm = 10 * log10(pow(pr, 1.0 / 80) / (sum / 80));
+    e = sqrtl(sr / 80.0);
+    sfm = -10 * log10f(expf(pr / 80.0) / (sum / 80.0));
     f = arg_f(80, real, imag);
-    tresh_e = energy_primthresh * log10(min_e);
-    tresh_sfm = sf_primthresh;
-    tresh_f = f_primthresh;
+    if (i == 0) {
+      min_e = e;
+      min_sfm = sfm;
+      min_f = f;
+    } else if (i < 30) {
+      min_e = (e > min_e) ? min_e : e;
+      min_sfm = (sfm > min_sfm) ? min_sfm : sfm;
+      min_f = (f > min_f) ? min_f : f;
+    }
+    tresh_e = energy_primthresh * log10f(min_e);
     count = 0;
     if ((e - min_e) >= tresh_e)
       count++;
@@ -140,19 +153,18 @@ void vad(int16_t *buf, size_t k) {
       silence = 0;
       speech++;
     } else {
+      silence++;
       min_e = ((silence * min_e) + e) / (silence + 1);
       speech = 0;
-      silence++;
     }
-    tresh_e = energy_primthresh * log10(min_e);
-    if (silence == 15) {
-      printf("Silence\n");
-      silence = 0;
-    } else if (speech == 5) {
-      printf("Speech\n");
-      speech = 0;
+    tresh_e = energy_primthresh * log10f(min_e);
+    if (silence > 9) {
+      fprintf(res, "Silence\n");
+    } else if (speech > 4) {
+      fprintf(res, "Speech\n");
     }
   }
+  fclose(res);
 }
 
 void main() {
@@ -161,24 +173,24 @@ void main() {
   int16_t sample;
   int16_t count;
   size_t k = 0;
-  FILE *FWAV;
+  FILE *fwav;
   FILE *txtfile;
   txtfile = fopen("samples.txt", "w");
-  FWAV = popen("ffmpeg -i 1.wav -f s16le -ar 8000 -ac 1 -", "r");
+  fwav = popen("ffmpeg -i 1.wav -f s16le -ar 8000 -ac 1 -", "r");
   while (1) {
-    count = fread(&sample, 2, 1, FWAV);
+    count = fread(&sample, 2, 1, fwav);
     if (count == 1) {
       k++;
       fprintf(txtfile, "%ld     %d \n", k, sample);
     } else
       break;
   }
-  pclose(FWAV);
+  pclose(fwav);
   fclose(txtfile);
   int16_t *buf = malloc(k * sizeof(int16_t));
-  FWAV = popen("ffmpeg -i 1.wav -f s16le -ar 8000 -ac 1 -", "r");
-  fread(buf, 2, k, FWAV);
-  pclose(FWAV);
+  fwav = popen("ffmpeg -i 1.wav -f s16le -ar 8000 -ac 1 -", "r");
+  fread(buf, 2, k, fwav);
+  pclose(fwav);
   int16_t l;
 
   // ֲûבמנ אכדמנטעלמג
