@@ -9,7 +9,9 @@ void porogoviy(int16_t *buf, size_t k) {
   int16_t limit;
   int16_t flag = 1;
   int32_t sr = 0;
+  FILE *res;
   while (flag) {
+    res = fopen("res.txt", "w");
     printf("Enter the limit value of the amplitude \n");
     scanf("%hd", &limit);
     for (size_t i = 0; i < k; i = i + 80) {
@@ -18,8 +20,9 @@ void porogoviy(int16_t *buf, size_t k) {
         sr = sr + buf[j] * buf[j];
       }
       if (sr / 80.0 > limit * limit)
-        printf("Recognized sound on %ld  \n", i);
+        fprintf(res, "Recognized sound on %ld - %ld \n", i + 1, i + 80);
     }
+    fclose(res);
     printf("Change the limit?  1 - Yes;  0 - No \n");
     scanf("%hd", &flag);
   }
@@ -105,9 +108,9 @@ void vad(int16_t *buf, size_t k) {
   double sr = 0;
   double sum = 0;
   int16_t pr = 1;
-  double min_e = sqrtl(sr / 5400);
-  double min_sfm = -10 * log10f(expf(pr / 5400) / (sum / 5400.0));
-  double min_f = arg_f(5400, real, imag);
+  double min_e;
+  double min_sfm;
+  double min_f;
   double e = 0;
   double sfm = 0;
   double f = 0;
@@ -167,6 +170,15 @@ void vad(int16_t *buf, size_t k) {
   fclose(res);
 }
 
+void rnnoise() {
+  FILE *w;
+  FILE *z;
+  z = popen("ffmpeg -i rnnoise/1.wav -ar 48000 -ac 1 rnnoise/11.wav", "r");
+  w = popen("rnnoise/examples/rnnoise_demo rnnoise/11.wav out.wav", "r");
+  pclose(w);
+  pclose(z);
+}
+
 void main() {
   // Работа с файлами
 
@@ -194,16 +206,20 @@ void main() {
   int16_t l;
 
   // Выбор алгоритмов
+  while (l != 0) {
+    printf("Choose an algorithm.  1 - Porogoviy;  2 - Herzel;  3 - VAD; "
+           "4 - RNNoise;    0 - Exit \n");
+    scanf("%hd", &l);
 
-  printf("Choose an algorithm.  1 - Porogoviy;  2 - Herzel;  3 - VAD \n");
-  scanf("%hd", &l);
-
-  if (l == 1) {
-    porogoviy(buf, k);
-  } else if (l == 2) {
-    herzel(buf, k);
-  } else {
-    vad(buf, k);
+    if (l == 1) {
+      porogoviy(buf, k);
+    } else if (l == 2) {
+      herzel(buf, k);
+    } else if (l == 3) {
+      vad(buf, k);
+    } else if (l == 4) {
+      rnnoise();
+    }
   }
   free(buf);
 }
